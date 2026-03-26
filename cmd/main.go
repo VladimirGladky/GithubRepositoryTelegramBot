@@ -26,7 +26,7 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal("Failed to load config")
+		panic("Failed to load config: " + err.Error())
 	}
 
 	db, err := storage.New("/app/data/collaborators.db")
@@ -37,7 +37,7 @@ func main() {
 
 	ghClient := githubclient.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo)
 
-	bot, err := telegrambot.New(cfg.TelegramToken, ghClient, db, ctx, cfg.TelegramGroupID, cfg.CheckCron, cfg.AdminChatIDs)
+	bot, err := telegrambot.New(cfg.TelegramToken, ghClient, db, ctx, cfg.TelegramGroupIDs, cfg.CheckCron, cfg.AdminChatIDs)
 	if err != nil {
 		log.Fatal("Failed to create bot")
 	}

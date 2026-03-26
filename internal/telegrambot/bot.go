@@ -17,12 +17,12 @@ type Bot struct {
 	github       *githubclient.Client
 	storage      *storage.Storage
 	ctx          context.Context
-	groupID      int64
+	groupIDs     []int64
 	checkCron    string
 	adminChatIDs []int64
 }
 
-func New(token string, githubClient *githubclient.Client, storage *storage.Storage, ctx context.Context, groupID int64, checkCron string, adminChatIDs []int64) (*Bot, error) {
+func New(token string, githubClient *githubclient.Client, storage *storage.Storage, ctx context.Context, groupIDs []int64, checkCron string, adminChatIDs []int64) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
@@ -33,7 +33,7 @@ func New(token string, githubClient *githubclient.Client, storage *storage.Stora
 		github:       githubClient,
 		storage:      storage,
 		ctx:          ctx,
-		groupID:      groupID,
+		groupIDs:     groupIDs,
 		checkCron:    checkCron,
 		adminChatIDs: adminChatIDs,
 	}
@@ -104,25 +104,40 @@ func (b *Bot) checkCollaborators() {
 	var failed []string
 
 	for _, c := range collaborators {
-		member, err := b.api.GetChatMember(tgbotapi.GetChatMemberConfig{
-			ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
-				ChatID: b.groupID,
-				UserID: c.TelegramID,
-			},
-		})
-		if err != nil {
-			b.log().Error("Failed to check membership",
+		isMember := false
+		var lastErr error
+
+		for _, groupID := range b.groupIDs {
+			member, err := b.api.GetChatMember(tgbotapi.GetChatMemberConfig{
+				ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
+					ChatID: groupID,
+					UserID: c.TelegramID,
+				},
+			})
+			if err != nil {
+				lastErr = err
+				continue
+			}
+
+			if !member.HasLeft() && !member.WasKicked() {
+				isMember = true
+				break
+			}
+		}
+
+		if lastErr != nil && !isMember {
+			b.log().Error("Failed to check membership in all groups",
 				zap.String("github_username", c.GitHubUsername),
 				zap.Int64("telegram_id", c.TelegramID),
-				zap.Error(err),
+				zap.Error(lastErr),
 			)
-			b.notifyAdmins(fmt.Sprintf("ERROR: Failed to check membership for @%s (tg_id=%d): %v", c.GitHubUsername, c.TelegramID, err))
+			b.notifyAdmins(fmt.Sprintf("ERROR: Failed to check membership for @%s (tg_id=%d): %v", c.GitHubUsername, c.TelegramID, lastErr))
 			failed = append(failed, c.GitHubUsername)
 			continue
 		}
 
-		if member.HasLeft() || member.WasKicked() {
-			b.log().Info("User left the group, removing collaborator",
+		if !isMember {
+			b.log().Info("User left all groups, removing collaborator",
 				zap.String("github_username", c.GitHubUsername),
 			)
 

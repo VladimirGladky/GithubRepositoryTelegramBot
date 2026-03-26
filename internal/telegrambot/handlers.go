@@ -54,22 +54,25 @@ func (b *Bot) handleStart(message *tgbotapi.Message) {
 }
 
 func (b *Bot) isMember(userID int64) (bool, error) {
-	member, err := b.api.GetChatMember(tgbotapi.GetChatMemberConfig{
-		ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
-			ChatID: b.groupID,
-			UserID: userID,
-		},
-	})
+	for _, groupID := range b.groupIDs {
+		member, err := b.api.GetChatMember(tgbotapi.GetChatMemberConfig{
+			ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
+				ChatID: groupID,
+				UserID: userID,
+			},
+		})
 
-	if err != nil {
-		return false, err
+		if err != nil {
+			continue
+		}
+
+		switch member.Status {
+		case "member", "administrator", "creator", "restricted":
+			return true, nil
+		}
 	}
-	switch member.Status {
-	case "member", "administrator", "creator", "restricted":
-		return true, nil
-	default:
-		return false, nil
-	}
+
+	return false, nil
 }
 
 func (b *Bot) handleText(message *tgbotapi.Message) {
@@ -126,7 +129,7 @@ func (b *Bot) handleAdd(message *tgbotapi.Message, username string) {
 		b.notifyAdmins(fmt.Sprintf("ERROR: Failed to save @%s to db: %v", username, err))
 	}
 
-	b.send(message.Chat.ID, fmt.Sprintf("Пользователю @%s отправлен инвайт в репозиторий.", username))
+	b.send(message.Chat.ID, fmt.Sprintf("Пользователю @%s отправлен инвайт в репозиторий. \n\n https://github.com/itkrasavchik/home-assignments", username))
 }
 
 func (b *Bot) send(chatID int64, text string) {

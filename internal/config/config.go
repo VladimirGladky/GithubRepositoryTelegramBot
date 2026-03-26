@@ -11,13 +11,13 @@ import (
 )
 
 type Config struct {
-	TelegramToken   string
-	GitHubToken     string
-	GitHubOwner     string
-	GitHubRepo      string
-	TelegramGroupID int64
-	CheckCron       string
-	AdminChatIDs    []int64
+	TelegramToken    string
+	GitHubToken      string
+	GitHubOwner      string
+	GitHubRepo       string
+	TelegramGroupIDs []int64
+	CheckCron        string
+	AdminChatIDs     []int64
 }
 
 func Load() (*Config, error) {
@@ -25,24 +25,24 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("error loading .env file: %w", err)
 	}
 
-	groupID, err := strconv.ParseInt(os.Getenv("TELEGRAM_GROUP_ID"), 10, 64)
+	groupIDs, err := parseInt64List(os.Getenv("TELEGRAM_GROUP_IDS"))
 	if err != nil {
-		return nil, fmt.Errorf("TELEGRAM_GROUP_ID must be a valid integer: %w", err)
+		return nil, fmt.Errorf("TELEGRAM_GROUP_IDS is invalid: %w", err)
 	}
 
-	adminChatIDs, err := parseAdminChatIDs(os.Getenv("ADMIN_CHAT_IDS"))
+	adminChatIDs, err := parseInt64List(os.Getenv("ADMIN_CHAT_IDS"))
 	if err != nil {
 		return nil, fmt.Errorf("ADMIN_CHAT_IDS is invalid: %w", err)
 	}
 
 	cfg := &Config{
-		TelegramToken:   os.Getenv("TELEGRAM_TOKEN"),
-		GitHubToken:     os.Getenv("GITHUB_TOKEN"),
-		GitHubOwner:     os.Getenv("GITHUB_OWNER"),
-		GitHubRepo:      os.Getenv("GITHUB_REPO"),
-		TelegramGroupID: groupID,
-		CheckCron:       os.Getenv("CHECK_CRON"),
-		AdminChatIDs:    adminChatIDs,
+		TelegramToken:    os.Getenv("TELEGRAM_TOKEN"),
+		GitHubToken:      os.Getenv("GITHUB_TOKEN"),
+		GitHubOwner:      os.Getenv("GITHUB_OWNER"),
+		GitHubRepo:       os.Getenv("GITHUB_REPO"),
+		TelegramGroupIDs: groupIDs,
+		CheckCron:        os.Getenv("CHECK_CRON"),
+		AdminChatIDs:     adminChatIDs,
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -52,7 +52,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-func parseAdminChatIDs(raw string) ([]int64, error) {
+func parseInt64List(raw string) ([]int64, error) {
 	var ids []int64
 	for _, part := range strings.Split(raw, ",") {
 		part = strings.TrimSpace(part)
@@ -81,8 +81,8 @@ func (c *Config) validate() error {
 	if c.GitHubRepo == "" {
 		return fmt.Errorf("GITHUB_REPO is required")
 	}
-	if c.TelegramGroupID == 0 {
-		return fmt.Errorf("TELEGRAM_GROUP_ID is required")
+	if len(c.TelegramGroupIDs) == 0 {
+		return fmt.Errorf("TELEGRAM_GROUP_IDS is required")
 	}
 	if c.CheckCron == "" {
 		return fmt.Errorf("CHECK_CRON is required")
