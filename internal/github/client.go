@@ -62,10 +62,44 @@ func (c *Client) AddCollaborator(ctx context.Context, username string) error {
 }
 
 func (c *Client) RemoveCollaborator(ctx context.Context, username string) error {
-	_, err := c.client.Repositories.RemoveCollaborator(ctx, c.owner, c.repo, username)
+	isCollab, _, err := c.client.Repositories.IsCollaborator(ctx, c.owner, c.repo, username)
 	if err != nil {
-		return fmt.Errorf("failed to remove collaborator: %w", err)
+		return fmt.Errorf("failed to check collaborator status: %w", err)
 	}
+
+	if isCollab {
+		if _, err := c.client.Repositories.RemoveCollaborator(ctx, c.owner, c.repo, username); err != nil {
+			return fmt.Errorf("failed to remove collaborator: %w", err)
+		}
+		return nil
+	}
+
+	return c.deletePendingInvitation(ctx, username)
+}
+
+func (c *Client) deletePendingInvitation(ctx context.Context, username string) error {
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		invitations, resp, err := c.client.Repositories.ListInvitations(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return fmt.Errorf("failed to list invitations: %w", err)
+		}
+
+		for _, inv := range invitations {
+			if inv.GetInvitee().GetLogin() == username {
+				if _, err := c.client.Repositories.DeleteInvitation(ctx, c.owner, c.repo, inv.GetID()); err != nil {
+					return fmt.Errorf("failed to delete invitation: %w", err)
+				}
+				return nil
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
 	return nil
 }
 
