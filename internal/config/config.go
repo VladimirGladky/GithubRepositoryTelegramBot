@@ -21,9 +21,7 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	if err := godotenv.Load(); err != nil {
-		return nil, fmt.Errorf("error loading .env file: %w", err)
-	}
+	_ = godotenv.Load()
 
 	groupIDs, err := parseInt64List(os.Getenv("TELEGRAM_GROUP_IDS"))
 	if err != nil {
