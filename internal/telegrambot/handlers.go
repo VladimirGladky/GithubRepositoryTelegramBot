@@ -107,7 +107,7 @@ func (b *Bot) handleText(message *tgbotapi.Message) {
 		return
 	}
 	if !ok {
-		b.send(message.Chat.ID, "Как будто ты еще не вступил в наш замечательный Клуб АйТи Красавчиков.\n\nДля этого надо купить любой уровень подписки на https://boosty.to/itkrasavchik и добавиться в приватный телеграм чат клуба.\n\nПосле этого приходи обратно - вышлем тебе доступ к домашкам.\n\nОстались вопросы - пиши @itkrasavchik-у")
+		b.send(message.Chat.ID, "Как будто ты еще не вступил в наш замечательный Клуб АйТи Красавчиков.\n\nДля этого надо купить любой уровень подписки на https://boosty.to/itkrasavchik, привязать свой телеграмм на https://boosty.to/app/settings/external-apps и добавиться в приватный чат клуба через @boosty_to_bot.\n\nПосле этого приходи обратно - вышлем тебе доступ к домашкам.\n\nОстались вопросы - пиши @itkrasavchik-у")
 		return
 	}
 
