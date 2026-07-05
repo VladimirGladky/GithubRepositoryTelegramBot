@@ -1,12 +1,19 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/google/go-github/v83/github"
+)
+
+const (
+	maxRetries = 3
+	retryDelay = 2 * time.Second
 )
 
 type Client struct {
@@ -109,5 +116,41 @@ type tokenTransport struct {
 
 func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", "Bearer "+t.token)
-	return http.DefaultTransport.RoundTrip(req)
+
+	var body []byte
+	if req.Body != nil {
+		b, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body.Close()
+		body = b
+	}
+
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if body != nil {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		resp, err = http.DefaultTransport.RoundTrip(req)
+		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		if attempt < maxRetries {
+			select {
+			case <-time.After(retryDelay):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+		}
+	}
+
+	return resp, err
 }

@@ -6,10 +6,13 @@ import (
 	"strings"
 
 	githubclient "GithubTelegramBot/internal/github"
+	"GithubTelegramBot/internal/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"go.uber.org/zap"
 )
+
+const maxUsernameChanges = 5
 
 func userMessageFromErr(err error) string {
 	var collabErr *githubclient.CollaboratorError
@@ -96,7 +99,17 @@ func (b *Bot) handleText(message *tgbotapi.Message) {
 	}
 
 	if existing != nil {
-		b.send(message.Chat.ID, fmt.Sprintf("Ты уже зарегистрирован как @%s.", existing.GitHubUsername))
+		if existing.GitHubUsername == username {
+			b.send(message.Chat.ID, "Ты отправил такой же github username.")
+			return
+		}
+
+		if existing.ChangeCount >= maxUsernameChanges {
+			b.send(message.Chat.ID, fmt.Sprintf("Лимит смены github username исчерпан (%d/%d). Обратись к @smooth23v.", maxUsernameChanges, maxUsernameChanges))
+			return
+		}
+
+		b.handleChange(message, existing, username)
 		return
 	}
 
@@ -124,12 +137,47 @@ func (b *Bot) handleAdd(message *tgbotapi.Message, username string) {
 		return
 	}
 
-	if err := b.storage.Save(message.From.ID, username); err != nil {
+	changeCount := 1
+	if err := b.storage.Save(message.From.ID, username, changeCount); err != nil {
 		b.log().Error("Error saving collaborator to db", zap.String("username", username), zap.Error(err))
 		b.notifyAdmins(fmt.Sprintf("ERROR: Failed to save @%s to db: %v", username, err))
 	}
 
-	b.send(message.Chat.ID, fmt.Sprintf("Пользователю @%s отправлен инвайт в репозиторий. \n\n https://github.com/itkrasavchik/home-assignments", username))
+	b.sendInvited(message.Chat.ID, username, changeCount)
+}
+
+func (b *Bot) handleChange(message *tgbotapi.Message, existing *models.Collaborator, username string) {
+	b.log().Info("Changing collaborator", zap.String("old", existing.GitHubUsername), zap.String("new", username))
+
+	if err := b.github.RemoveCollaborator(b.ctx, existing.GitHubUsername); err != nil {
+		b.log().Error("Error removing old collaborator", zap.String("username", existing.GitHubUsername), zap.Error(err))
+		b.send(message.Chat.ID, fmt.Sprintf("Не удалось отозвать доступ у @%s: %s", existing.GitHubUsername, userMessageFromErr(err)))
+		b.notifyAdmins(fmt.Sprintf("ERROR: Failed to remove @%s as collaborator: %v", existing.GitHubUsername, err))
+		return
+	}
+
+	if err := b.github.AddCollaborator(b.ctx, username); err != nil {
+		b.log().Error("Error adding collaborator", zap.String("username", username), zap.Error(err))
+		b.send(message.Chat.ID, fmt.Sprintf("Не удалось добавить @%s: %s", username, userMessageFromErr(err)))
+		b.notifyAdmins(fmt.Sprintf("ERROR: Failed to add @%s as collaborator: %v", username, err))
+		return
+	}
+
+	changeCount := existing.ChangeCount + 1
+	if err := b.storage.Save(message.From.ID, username, changeCount); err != nil {
+		b.log().Error("Error saving collaborator to db", zap.String("username", username), zap.Error(err))
+		b.notifyAdmins(fmt.Sprintf("ERROR: Failed to save @%s to db: %v", username, err))
+	}
+
+	b.sendInvited(message.Chat.ID, username, changeCount)
+}
+
+func (b *Bot) sendInvited(chatID int64, username string, changeCount int) {
+	text := fmt.Sprintf("Пользователю @%s отправлен инвайт в репозиторий.\n\nhttps://github.com/itkrasavchik/home-assignments", username)
+	if changeCount < maxUsernameChanges {
+		text += fmt.Sprintf("\n\nЕсли ты хочешь поменять github username, отправь новый github username (Попытка %d/%d)\n\nСтарому github username инвайт будет отозван.", changeCount, maxUsernameChanges)
+	}
+	b.send(chatID, text)
 }
 
 func (b *Bot) send(chatID int64, text string) {

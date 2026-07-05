@@ -35,20 +35,42 @@ func (s *Storage) migrate() error {
 	CREATE TABLE IF NOT EXISTS collaborators (
 		telegram_id     INTEGER PRIMARY KEY,
 		github_username TEXT NOT NULL,
-		added_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+		added_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+		change_count    INTEGER NOT NULL DEFAULT 0
 	);`
 
-	_, err := s.db.Exec(query)
-	return err
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('collaborators') WHERE name = 'change_count'`,
+	).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE collaborators ADD COLUMN change_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`UPDATE collaborators SET change_count = 1 WHERE change_count = 0`); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (s *Storage) Save(telegramID int64, githubUsername string) error {
+func (s *Storage) Save(telegramID int64, githubUsername string, changeCount int) error {
 	query := `
-	INSERT INTO collaborators (telegram_id, github_username)
-	VALUES (?, ?)
-	ON CONFLICT(telegram_id) DO UPDATE SET github_username = excluded.github_username`
+	INSERT INTO collaborators (telegram_id, github_username, change_count)
+	VALUES (?, ?, ?)
+	ON CONFLICT(telegram_id) DO UPDATE SET
+		github_username = excluded.github_username,
+		change_count = excluded.change_count`
 
-	_, err := s.db.Exec(query, telegramID, githubUsername)
+	_, err := s.db.Exec(query, telegramID, githubUsername, changeCount)
 	if err != nil {
 		return fmt.Errorf("failed to save collaborator: %w", err)
 	}
@@ -58,8 +80,8 @@ func (s *Storage) Save(telegramID int64, githubUsername string) error {
 func (s *Storage) GetByTelegramID(telegramID int64) (*models.Collaborator, error) {
 	var c models.Collaborator
 	err := s.db.QueryRow(
-		`SELECT telegram_id, github_username FROM collaborators WHERE telegram_id = ?`, telegramID,
-	).Scan(&c.TelegramID, &c.GitHubUsername)
+		`SELECT telegram_id, github_username, change_count FROM collaborators WHERE telegram_id = ?`, telegramID,
+	).Scan(&c.TelegramID, &c.GitHubUsername, &c.ChangeCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -70,7 +92,7 @@ func (s *Storage) GetByTelegramID(telegramID int64) (*models.Collaborator, error
 }
 
 func (s *Storage) GetAll() ([]models.Collaborator, error) {
-	rows, err := s.db.Query(`SELECT telegram_id, github_username FROM collaborators`)
+	rows, err := s.db.Query(`SELECT telegram_id, github_username, change_count FROM collaborators`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get collaborators: %w", err)
 	}
@@ -79,7 +101,7 @@ func (s *Storage) GetAll() ([]models.Collaborator, error) {
 	var result []models.Collaborator
 	for rows.Next() {
 		var c models.Collaborator
-		if err := rows.Scan(&c.TelegramID, &c.GitHubUsername); err != nil {
+		if err := rows.Scan(&c.TelegramID, &c.GitHubUsername, &c.ChangeCount); err != nil {
 			return nil, err
 		}
 		result = append(result, c)
