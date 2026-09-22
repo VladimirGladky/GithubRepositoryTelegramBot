@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v83/github"
@@ -14,6 +15,14 @@ import (
 const (
 	maxRetries = 3
 	retryDelay = 2 * time.Second
+
+	// rawErrorBodyHeader carries a copy of a 4xx response body from the
+	// transport up to the caller. go-github drops the body when it cannot
+	// unmarshal it (e.g. GitHub sometimes returns "errors" as a string
+	// instead of an array), which would otherwise leave us with a bare
+	// status code and no explanation.
+	rawErrorBodyHeader = "X-Bot-Raw-Error-Body"
+	maxRawErrorBody    = 2048
 )
 
 type Client struct {
@@ -45,27 +54,55 @@ func (e *CollaboratorError) Error() string {
 }
 
 func (c *Client) AddCollaborator(ctx context.Context, username string) error {
-	opts := &github.RepositoryAddCollaboratorOptions{
-		Permission: "pull",
-	}
+	// Do not send "permission": it is only valid for organization-owned
+	// repositories. Since 2026-09-22 GitHub rejects it on personal repos with
+	// 422 "Cannot assign <user> permission of read". Collaborators on a
+	// personal private repo always get write access anyway.
+	opts := &github.RepositoryAddCollaboratorOptions{}
 
-	resp, _, err := c.client.Repositories.AddCollaborator(ctx, c.owner, c.repo, username, opts)
+	_, _, err := c.client.Repositories.AddCollaborator(ctx, c.owner, c.repo, username, opts)
 	if err != nil {
-		ghErr, ok := err.(*github.ErrorResponse)
-		if ok && len(ghErr.Errors) > 0 {
-			return &CollaboratorError{
-				UserMessage: ghErr.Errors[0].Message,
-				FullError:   fmt.Errorf("failed to add collaborator: %w", err),
-			}
+		var ghErr *github.ErrorResponse
+		if e, ok := err.(*github.ErrorResponse); ok {
+			ghErr = e
 		}
-		return fmt.Errorf("failed to add collaborator: %w", err)
-	}
+		if ghErr == nil {
+			return fmt.Errorf("failed to add collaborator: %w", err)
+		}
 
-	if resp != nil {
-		_ = resp
+		raw := rawErrorBody(ghErr.Response)
+		full := fmt.Errorf("failed to add collaborator: %w", err)
+		if raw != "" {
+			full = fmt.Errorf("failed to add collaborator: %w; body: %s", err, raw)
+		}
+
+		return &CollaboratorError{
+			UserMessage: userMessage(ghErr, raw),
+			FullError:   full,
+		}
 	}
 
 	return nil
+}
+
+func userMessage(ghErr *github.ErrorResponse, raw string) string {
+	if len(ghErr.Errors) > 0 && ghErr.Errors[0].Message != "" {
+		return ghErr.Errors[0].Message
+	}
+	if ghErr.Message != "" {
+		return ghErr.Message
+	}
+	if raw != "" {
+		return raw
+	}
+	return fmt.Sprintf("GitHub вернул %d", ghErr.Response.StatusCode)
+}
+
+func rawErrorBody(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	return strings.TrimSpace(resp.Header.Get(rawErrorBodyHeader))
 }
 
 func (c *Client) RemoveCollaborator(ctx context.Context, username string) error {
@@ -136,6 +173,9 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err = http.DefaultTransport.RoundTrip(req)
 		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			if resp.StatusCode >= 400 {
+				stashErrorBody(resp)
+			}
 			return resp, nil
 		}
 
@@ -153,4 +193,25 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, err
+}
+
+// stashErrorBody reads a 4xx body, puts it back for go-github to parse, and
+// keeps a single-line copy in rawErrorBodyHeader.
+func stashErrorBody(resp *http.Response) {
+	if resp.Body == nil {
+		return
+	}
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		return
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+
+	oneLine := strings.Join(strings.Fields(string(b)), " ")
+	if len(oneLine) > maxRawErrorBody {
+		oneLine = oneLine[:maxRawErrorBody] + "..."
+	}
+	resp.Header.Set(rawErrorBodyHeader, oneLine)
 }
